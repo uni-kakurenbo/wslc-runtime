@@ -40,6 +40,7 @@ pub fn lock(cache: &Path) -> Result<File> {
 struct Settings([u8; 72]);
 type Init = unsafe extern "system" fn(*const u16, *const u16, *mut Settings) -> i32;
 type Memory = unsafe extern "system" fn(*mut Settings, u32) -> i32;
+type CpuCount = unsafe extern "system" fn(*mut Settings, u32) -> i32;
 type Create = unsafe extern "system" fn(*mut Settings, *mut *mut c_void, *mut *mut u16) -> i32;
 type Close = unsafe extern "system" fn(*mut c_void) -> i32;
 
@@ -82,6 +83,7 @@ pub struct Api {
     _com: Com,
     init: Init,
     memory: Memory,
+    cpu_count: CpuCount,
     create: Create,
     terminate: Close,
     release: Close,
@@ -136,6 +138,13 @@ impl Api {
             )?)
         };
 
+        // SAFETY: the pinned SDK header declares this export with the CpuCount signature.
+        let cpu_count = unsafe {
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, CpuCount>(symbol(
+                c"WslcSetSessionSettingsCpuCount",
+            )?)
+        };
+
         // SAFETY: the pinned SDK header declares this export with the Create signature.
         let create = unsafe {
             std::mem::transmute::<unsafe extern "system" fn() -> isize, Create>(symbol(
@@ -162,6 +171,7 @@ impl Api {
             _com: com,
             init,
             memory,
+            cpu_count,
             create,
             terminate,
             release,
@@ -178,6 +188,9 @@ impl Api {
             return Err("Session name and nonzero memory limit are required".into());
         }
 
+        let cpu_count = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        let cpu_count = u32::try_from(cpu_count).map_err(|_| "Host CPU count exceeds SDK limit")?;
+
         let name_wide = wide(OsStr::new(name))?;
         let storage = wide(storage.as_os_str())?;
 
@@ -189,9 +202,15 @@ impl Api {
         )?;
         hresult(
             // SAFETY: init succeeded and settings has the SDK's required size/alignment.
+            unsafe { (self.cpu_count)(&mut settings, cpu_count) },
+            "Set WSLC CPU count",
+        )?;
+        hresult(
+            // SAFETY: init succeeded and settings has the SDK's required size/alignment.
             unsafe { (self.memory)(&mut settings, memory_mb) },
             "Set WSLC memory",
         )?;
+        eprintln!("WSLC session resources: {cpu_count} CPUs, {memory_mb} MiB memory");
 
         let mut handle = null_mut();
         let mut error = null_mut();

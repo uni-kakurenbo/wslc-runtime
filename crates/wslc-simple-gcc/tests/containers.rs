@@ -75,6 +75,27 @@ fn real_gcc_requests_and_owned_session_timeout() {
             "<hello world>\n<>\n<quote\"test>\n<semi;colon>\n<$(literal)>\n<日本語>\n"
         );
 
+        let cpu_count = context.run(
+            &RunOptions {
+                image: request.image.clone(),
+                mounts: Vec::new(),
+                workdir: "/".into(),
+                entrypoint: "/usr/bin/getconf".into(),
+                arguments: vec!["_NPROCESSORS_ONLN".into()],
+                pull: Pull::Never,
+                interactive: false,
+                tty: false,
+            },
+            Duration::from_secs(30),
+            true,
+        )?;
+        assert_eq!(cpu_count.code, 0, "{}", cpu_count.stderr);
+        assert_eq!(
+            cpu_count.stdout.trim().parse::<usize>().unwrap(),
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+            "Linux must see the CPU count assigned from the Windows host"
+        );
+
         let output = Request::new(vec![exits.clone()]).prepare()?.run(
             context,
             Duration::from_secs(60),
