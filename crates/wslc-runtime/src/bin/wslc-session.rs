@@ -1,4 +1,4 @@
-//! Run a host command while its children borrow an explicitly owned WSLC session.
+//! Run a host command with a WSLC session available to its child processes.
 
 use std::process::ExitCode;
 

@@ -1,4 +1,4 @@
-//! Requests carry mounts and argument boundaries independently of application policy.
+//! Create WSLC sessions, mount host directories, and run container commands.
 
 use crate::process::{Output, Runner, find_program};
 use crate::{Result, sdk, session};
@@ -8,6 +8,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// SDK cache, session storage, and memory limit for a WSLC session.
 #[derive(Clone, Debug)]
 pub struct SessionOptions {
     pub cache: PathBuf,
@@ -18,6 +19,7 @@ pub struct SessionOptions {
 }
 
 impl SessionOptions {
+    /// Use `cache` for the SDK and `cache/session-storage` for the session.
     pub fn new(cache: PathBuf) -> Self {
         Self {
             storage: cache.join("session-storage"),
@@ -28,7 +30,7 @@ impl SessionOptions {
         }
     }
 
-    /// Process configuration is shared by launchers and tools using a connection.
+    /// Read the `WSLC_*` environment variables, using defaults for unset values.
     pub fn from_env() -> Result<Self> {
         let cache = std::env::var_os("WSLC_CACHE")
             .map(PathBuf::from)
@@ -131,6 +133,7 @@ pub struct RunOptions {
     pub tty: bool,
 }
 
+/// Connection used to build and run commands in a named WSLC session.
 pub struct Context<'a> {
     root: &'a Path,
     executable: PathBuf,
@@ -138,7 +141,9 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    /// Borrow a named session. This connection never starts or terminates it.
+    /// Connect to a session created by another owner.
+    ///
+    /// The owner must keep the session alive until all commands and child processes finish.
     pub fn connect(root: &'a Path, name: &str, program: Option<&Path>) -> Result<Self> {
         if name.is_empty() {
             return Err("Session name must be nonempty".into());
@@ -151,11 +156,12 @@ impl<'a> Context<'a> {
         })
     }
 
-    /// Let a child borrow this session without changing process-global variables.
+    /// Set `WSLC_SESSION` and `WSLC_EXECUTABLE` on a child command.
     pub fn configure_child(&self, command: &mut Command) {
         command.envs(self.child_environment());
     }
 
+    /// Return the connection variables to pass to child processes using this session.
     pub fn child_environment(&self) -> [(&'static str, OsString); 2] {
         [
             ("WSLC_SESSION", self.name.clone().into()),
@@ -226,7 +232,7 @@ impl<'a> Context<'a> {
     }
 }
 
-/// Borrow the caller's session, or own a session for the duration of the operation.
+/// Use `WSLC_SESSION` if set; otherwise create and clean up a session around `operation`.
 pub fn with_connection<T>(
     root: &Path,
     options: &SessionOptions,
@@ -243,7 +249,9 @@ pub fn with_connection<T>(
     }
 }
 
-/// Own the session and its storage lock until every container operation finishes.
+/// Create a session, run `operation`, then terminate and release the session.
+///
+/// Calls sharing the same session storage wait for its exclusive lock.
 pub fn with_session<T>(
     root: &Path,
     options: &SessionOptions,

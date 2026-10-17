@@ -1,4 +1,4 @@
-//! The cache lock, loaded SDK and owned session all have scoped lifetimes.
+//! Load the WSLC SDK and release owned sessions when their scope ends.
 
 use crate::Result;
 use crate::sdk::wide;
@@ -16,7 +16,7 @@ pub fn lock(cache: &Path) -> Result<File> {
     lock_file(cache, false)
 }
 
-/// Wait for another owner instead of failing a concurrent compiler invocation.
+/// Acquire the directory's exclusive session lock, waiting until it is available.
 pub fn wait_lock(directory: &Path) -> Result<File> {
     lock_file(directory, true)
 }

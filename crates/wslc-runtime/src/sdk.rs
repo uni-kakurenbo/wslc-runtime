@@ -1,4 +1,4 @@
-//! Windows HTTPS downloads and checksum-verified local dependencies.
+//! Download, verify, and cache the WSLC SDK.
 
 use crate::Result;
 use sha2::{Digest, Sha256};
@@ -204,7 +204,7 @@ pub fn fetch(host: &str, resource: &str, destination: &Path, digest: &str) -> Re
     Ok(())
 }
 
-/// The archive and C ABI are pinned together.
+/// SDK archive version and expected SHA-256 digest for the supported C ABI.
 #[derive(Clone, Debug)]
 pub struct Options {
     pub version: String,

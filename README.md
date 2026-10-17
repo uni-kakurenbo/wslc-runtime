@@ -1,21 +1,33 @@
 # wslc-runtime
 
-WSL Containers の SDK・セッション・コンテナ実行を扱う Rust ライブラリと、ホストのコマンドへセッションを貸し出す `wslc-session` です。GCC、ソースの形式、特定のアプリの設定には依存しません。
+Run Linux containers through WSL Containers (WSLC), manage their sessions, and share a session with host commands. The Rust API also runs host processes with time limits and process-tree cleanup.
 
-## 必要な環境とインストール
+## Install
 
-WSLC の実行には x64 Windows と WSL 2.9.3 以上が必要です。Rust のビルドには固定した公式 1.99.0 ツールチェーンを使います。初回は Microsoft.WSL.Containers 3.0.1 の SDK を取得し、SHA-256 を検証します。
+Container execution requires x64 Windows and WSL 2.9.3 or later. Build with the repository's Rust 1.99.0 toolchain. The first session downloads Microsoft.WSL.Containers 3.0.1 and verifies its SHA-256 checksum.
 
 ```sh
-cargo install --path crates/wslc-runtime --locked
+cargo install --git https://github.com/uni-kakurenbo/wslc-runtime.git --locked wslc-runtime
 wslc-session --help
 ```
 
-`process` モジュールは Windows と Unix で利用できます。SDK・セッション・コンテナのモジュールは Windows で提供します。
+To install from a checkout, run `cargo install --path crates/wslc-runtime --locked`.
 
-## 所有と接続
+The `process` module supports Windows and Unix. The SDK, session, and container APIs are available on Windows.
 
-`with_session` はセッションを作成し、コールバック終了時に終了・解放します。`Context::connect` は既存の名前へ接続するだけで、セッションを作成・終了しません。`with_connection` は `WSLC_SESSION` が指定されていれば接続し、省略時は自分で所有します。
+## Share a session with a command
+
+```sh
+wslc-session -- your-build-tool
+```
+
+The launcher creates a session, sets `WSLC_SESSION` and `WSLC_EXECUTABLE` for the command, and keeps the session alive until the command finishes. Child processes use these variables to connect to the same session. Nested launchers reuse an existing `WSLC_SESSION`.
+
+Standard input, output, error, and the command's exit status pass through to the caller. Session startup and cleanup run without routine log messages on those streams.
+
+## Use the Rust API
+
+Use `with_session` to create a session for an operation and release it afterward:
 
 ```rust,no_run
 use std::process::Command;
@@ -32,39 +44,35 @@ with_session(&root, &options, |session| {
 }).unwrap();
 ```
 
-`configure_child` / `child_environment` は子の `WSLC_SESSION` と `WSLC_EXECUTABLE` を設定します。プロセス全体の環境変数は変更しません。親は子の完了までセッションを保持する必要があります。接続先の存続・アクセス権は呼び出し側の契約です。
+`configure_child` sets the connection variables on a `Command`. Use `child_environment` when another process-launching API accepts environment entries. The session owner must remain alive until its children finish.
 
-SDK キャッシュの更新は短いロックで保護し、実行中はセッション保存先を別のロックで保護します。同じ保存先を所有しようとする呼び出しは待機します。既存セッションへの接続は保存先のロックを取り直さないため、同じセッション内の複数のコンテナを並列実行できます。独立した所有者を同時実行する場合は `SessionOptions.storage` も分けます。
+`with_connection` connects to `WSLC_SESSION` when set and creates a session otherwise. `Context::connect` connects to a named session managed by another owner; that owner remains responsible for its lifetime.
 
-## コマンドへ貸し出す
+## Configuration and parallel execution
 
-```sh
-wslc-session -- your-build-tool
-```
-
-指定したホストのコマンドへ接続情報を渡し、その終了まで保持します。ネストした呼び出しは既存セッションを利用します。子の入出力と終了コードを中継し、通常の開始・終了ログは出しません。`wslc-runtime` 自体は、貸し出し先のコマンドの種類を知りません。
-
-| 環境変数 | 意味 | 既定値 |
+| Environment variable | Purpose | Default |
 | --- | --- | --- |
-| `WSLC_SESSION` | 接続する既存セッション | 省略時は所有 |
-| `WSLC_EXECUTABLE` | `wslc.exe` | PATH、次に Program Files |
-| `WSLC_CACHE` | SDK のキャッシュ | LocalAppData/wslc-runtime |
-| `WSLC_STORAGE` | 所有するセッションの保存先 | キャッシュ/session-storage |
-| `WSLC_MEMORY_MB` | 所有するセッションのメモリ | 2048 |
-| `WSLC_SDK_VERSION` / `WSLC_SDK_SHA256` | SDK の版と検証値 | 対応する 3.0.1 の値 |
-| `WSLC_COMMAND_TIMEOUT` | ランチャーの子の制限秒数 | 1800 |
+| `WSLC_SESSION` | Existing session to connect to | Create a session when unset |
+| `WSLC_EXECUTABLE` | Path to `wslc.exe` | Search PATH, then Program Files/WSL |
+| `WSLC_CACHE` | SDK cache directory | LocalAppData/wslc-runtime; temporary directory if LocalAppData is unavailable |
+| `WSLC_STORAGE` | Storage for a session created by this process | Cache directory/session-storage |
+| `WSLC_MEMORY_MB` | Session memory limit in MB | 2048 |
+| `WSLC_SDK_VERSION` / `WSLC_SDK_SHA256` | SDK archive version and expected checksum | Pinned 3.0.1 archive and checksum |
+| `WSLC_COMMAND_TIMEOUT` | Launcher command timeout in seconds | 1800 |
 
-Rust API はキャッシュ・保存先・メモリ・SDK を `SessionOptions` でも指定できます。CPU 数はホストの利用可能な CPU 数に合わせます。対応する SDK の C ABI は 3.0.1 に固定しています。
+In Rust, `SessionOptions::from_env` reads the SDK, executable, storage, and memory settings. `with_connection` reads `WSLC_SESSION`, and `WSLC_COMMAND_TIMEOUT` applies to the launcher. You can also set `SessionOptions` fields explicitly. CPU count follows the host's available parallelism. The supported SDK C ABI is 3.0.1.
 
-## 実行と解放
+Sessions sharing a storage directory run one at a time. To run containers in parallel, keep one session alive and let child commands connect to it. To create multiple sessions concurrently, give each owner a separate `SessionOptions.storage` directory. SDK downloads use a separate cache lock.
 
-`RunOptions` はイメージ、マウント、作業ディレクトリ、エントリポイント、引数を別々に保持します。引数をシェルのコードに埋め込みません。ホストのマウント元はローカル Windows ドライブ上、コンテナの作業ディレクトリは絶対パスにします。UNC パスは対象外です。
+## Run containers and host processes
 
-プロセスは Windows の Job Object / Unix のプロセスグループで所有し、タイムアウト時は子孫も終了します。`Runner` の文字列取得 API は UTF-8 不正列を置換します。バイトをそのまま中継する CLI は標準ハンドルを継承して利用します。Windows の NUL 入力を WSLC の対話入力へ接続しないため、`stdin_available` を提供します。
+`RunOptions` specifies the image, mounts, container working directory, entry point, and arguments. Use `Context::command` to construct a command or `Context::run` to execute it. Mount sources must be local Windows drive paths, and container destinations must be absolute Linux paths. UNC mount sources are unsupported.
 
-通常の終了・処理エラー・プロセスのタイムアウト時には所有セッションを終了・解放します。所有者自体の強制終了後の SDK による解放は保証しません。接続しただけのセッションや既定セッションは終了しません。
+`Runner` manages a Windows Job Object or Unix process group and terminates remaining descendants on completion or timeout. Captured output is decoded as UTF-8, replacing invalid sequences. Use inherited standard handles to forward bytes unchanged. `stdin_available` checks whether Windows input can be attached to WSLC; NUL input supplies EOF.
 
-## 検証
+Owned sessions are terminated and released on normal completion, errors, and command timeouts. Killing the owner process itself can prevent SDK cleanup. The creator of a borrowed session is responsible for terminating it.
+
+## Verify
 
 ```sh
 cargo test --locked --workspace
@@ -72,16 +80,12 @@ cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
-テストはアプリに依存しない合成プロセス、キャッシュの破損、所有権、タイムアウトを使います。端末継承のテストは Windows の端末で明示的に実行します。
+The tests cover process arguments, captured output, cache integrity, session cleanup, and timeouts. Run the console inheritance test from an attached Windows terminal:
 
 ```sh
 cargo test --locked -p wslc-runtime --test process -- --ignored --exact streaming_children_keep_the_attached_console --nocapture
 ```
 
-実際の GCC との連携は、独立した `wslc-gcc` リポジトリの統合テストで検証します。ライセンスは [MIT](LICENSE) です。
+Container integration tests are in [wslc-gcc](https://github.com/uni-kakurenbo/wslc-gcc).
 
-## Install from Git
-
-```sh
-cargo install --git https://github.com/uni-kakurenbo/wslc-runtime --locked wslc-runtime
-```
+[MIT License](LICENSE).

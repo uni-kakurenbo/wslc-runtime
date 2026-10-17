@@ -1,5 +1,4 @@
-//! Arguments are passed directly, with both output streams drained concurrently.
-//! Each invocation owns a process tree and releases it on completion or failure.
+//! Run commands with time limits, captured or inherited output, and process-tree cleanup.
 
 use crate::Result;
 use std::ffi::{OsStr, OsString};
@@ -14,7 +13,9 @@ use std::time::{Duration, Instant};
 pub const NATIVE_TIMEOUT: Duration = Duration::from_secs(120);
 pub const CONTAINER_TIMEOUT: Duration = Duration::from_secs(1800);
 
-/// WSLC cannot attach Windows NUL as interactive input; it already denotes EOF.
+/// Return whether standard input can be forwarded to WSLC.
+///
+/// Windows input must be a console, file, or pipe. NUL supplies EOF and is not forwarded.
 pub fn stdin_available() -> bool {
     #[cfg(windows)]
     {
@@ -33,8 +34,9 @@ pub fn stdin_available() -> bool {
     }
 }
 
-/// Return from CLI entry points after their scoped resources have been dropped.
-/// Preserve wide Windows status codes that stable `ExitCode` cannot represent.
+/// Convert a command result to a CLI exit status and print errors to stderr.
+///
+/// Call after releasing scoped resources: wide Windows status codes use `process::exit`.
 pub fn report(result: Result<i32>) -> ExitCode {
     let code = match result {
         Ok(code) => code,
