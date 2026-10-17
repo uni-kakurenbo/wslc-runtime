@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[derive(Clone, Debug)]
 pub struct SessionOptions {
     pub cache: PathBuf,
+    pub storage: PathBuf,
     pub sdk: sdk::Options,
     pub executable: Option<PathBuf>,
     pub memory_mb: u32,
@@ -19,11 +20,44 @@ pub struct SessionOptions {
 impl SessionOptions {
     pub fn new(cache: PathBuf) -> Self {
         Self {
+            storage: cache.join("session-storage"),
             cache,
             sdk: sdk::Options::default(),
             executable: None,
             memory_mb: 2048,
         }
+    }
+
+    /// Process configuration is shared by launchers and tools using a connection.
+    pub fn from_env() -> Result<Self> {
+        let cache = std::env::var_os("WSLC_CACHE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::var_os("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("wslc-runtime")
+            });
+        let mut options = Self::new(cache);
+        if let Some(storage) = std::env::var_os("WSLC_STORAGE") {
+            options.storage = storage.into();
+        }
+        options.executable = std::env::var_os("WSLC_EXECUTABLE").map(PathBuf::from);
+        if let Ok(version) = std::env::var("WSLC_SDK_VERSION") {
+            options.sdk.version = version;
+        }
+        if let Ok(digest) = std::env::var("WSLC_SDK_SHA256") {
+            options.sdk.sha256 = digest;
+        }
+        if let Ok(memory) = std::env::var("WSLC_MEMORY_MB") {
+            options.memory_mb = memory
+                .parse()
+                .map_err(|_| "WSLC_MEMORY_MB must be positive")?;
+            if options.memory_mb == 0 {
+                return Err("WSLC_MEMORY_MB must be positive".into());
+            }
+        }
+        Ok(options)
     }
 }
 
@@ -103,7 +137,32 @@ pub struct Context<'a> {
     name: String,
 }
 
-impl Context<'_> {
+impl<'a> Context<'a> {
+    /// Borrow a named session. This connection never starts or terminates it.
+    pub fn connect(root: &'a Path, name: &str, program: Option<&Path>) -> Result<Self> {
+        if name.is_empty() {
+            return Err("Session name must be nonempty".into());
+        }
+
+        Ok(Self {
+            root,
+            executable: executable(program)?,
+            name: name.into(),
+        })
+    }
+
+    /// Let a child borrow this session without changing process-global variables.
+    pub fn configure_child(&self, command: &mut Command) {
+        command.envs(self.child_environment());
+    }
+
+    pub fn child_environment(&self) -> [(&'static str, OsString); 2] {
+        [
+            ("WSLC_SESSION", self.name.clone().into()),
+            ("WSLC_EXECUTABLE", self.executable.as_os_str().to_owned()),
+        ]
+    }
+
     pub fn session_name(&self) -> &str {
         &self.name
     }
@@ -167,7 +226,24 @@ impl Context<'_> {
     }
 }
 
-/// Keep the SDK, session and cache lock alive until every container operation finishes.
+/// Borrow the caller's session, or own a session for the duration of the operation.
+pub fn with_connection<T>(
+    root: &Path,
+    options: &SessionOptions,
+    operation: impl FnOnce(&Context<'_>) -> Result<T>,
+) -> Result<T> {
+    match std::env::var("WSLC_SESSION") {
+        Ok(name) => operation(&Context::connect(
+            root,
+            &name,
+            options.executable.as_deref(),
+        )?),
+        Err(std::env::VarError::NotPresent) => with_session(root, options, operation),
+        Err(error) => Err(format!("WSLC_SESSION: {error}")),
+    }
+}
+
+/// Own the session and its storage lock until every container operation finishes.
 pub fn with_session<T>(
     root: &Path,
     options: &SessionOptions,
@@ -175,8 +251,12 @@ pub fn with_session<T>(
 ) -> Result<T> {
     let executable = executable(options.executable.as_deref())?;
     let cache = std::path::absolute(&options.cache).map_err(|e| e.to_string())?;
-    let _lock = session::lock(&cache)?;
-    let api = session::Api::load(&sdk::acquire(&cache, &options.sdk)?)?;
+    let api = {
+        let _sdk_lock = session::wait_lock(&cache.join("wslc-sdk"))?;
+        session::Api::load(&sdk::acquire(&cache, &options.sdk)?)?
+    };
+    let storage = std::path::absolute(&options.storage).map_err(|e| e.to_string())?;
+    let _storage_lock = session::wait_lock(&storage)?;
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let stamp = SystemTime::now()
@@ -188,9 +268,7 @@ pub fn with_session<T>(
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     );
-    eprintln!("Starting owned session {name}");
-
-    let mut owned = api.start(&name, &cache.join("session-storage"), options.memory_mb)?;
+    let mut owned = api.start(&name, &storage, options.memory_mb)?;
     let context = Context {
         root,
         executable,

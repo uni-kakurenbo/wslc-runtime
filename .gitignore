@@ -13,19 +13,15 @@
 
 /crates/*
 !/crates/wslc-runtime/
-!/crates/wslc-simple-gcc/
 /crates/*/*
 !/crates/*/Cargo.toml
 !/crates/*/src/
 !/crates/*/tests/
-!/crates/wslc-simple-gcc/assets/
 /crates/*/src/*
 !/crates/*/src/*.rs
+!/crates/*/src/bin/
+!/crates/*/src/bin/*.rs
 /crates/*/tests/*
 !/crates/*/tests/*.rs
-/crates/wslc-simple-gcc/assets/*
-!/crates/wslc-simple-gcc/assets/*.sh
 
 /examples/*
-!/examples/hello.c
-!/examples/hello.cpp

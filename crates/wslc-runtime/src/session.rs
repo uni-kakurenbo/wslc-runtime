@@ -13,6 +13,15 @@ use windows_sys::Win32::System::Com::{
 use windows_sys::Win32::System::LibraryLoader::*;
 
 pub fn lock(cache: &Path) -> Result<File> {
+    lock_file(cache, false)
+}
+
+/// Wait for another owner instead of failing a concurrent compiler invocation.
+pub fn wait_lock(directory: &Path) -> Result<File> {
+    lock_file(directory, true)
+}
+
+fn lock_file(cache: &Path, wait: bool) -> Result<File> {
     let path = cache.join("session.lock");
     fs::create_dir_all(cache).map_err(|e| e.to_string())?;
 
@@ -24,7 +33,12 @@ pub fn lock(cache: &Path) -> Result<File> {
         .open(&path)
         .map_err(|e| format!("Open checkout lock {}: {e}", path.display()))?;
 
-    file.try_lock().map_err(|e| {
+    let result = if wait {
+        file.lock().map_err(std::io::Error::other)
+    } else {
+        file.try_lock().map_err(std::io::Error::other)
+    };
+    result.map_err(|e| {
         format!(
             "Cannot lock {} (another session may be using this cache): {e}",
             path.display()
@@ -210,7 +224,6 @@ impl Api {
             unsafe { (self.memory)(&mut settings, memory_mb) },
             "Set WSLC memory",
         )?;
-        eprintln!("WSLC session resources: {cpu_count} CPUs, {memory_mb} MiB memory");
 
         let mut handle = null_mut();
         let mut error = null_mut();
@@ -242,7 +255,6 @@ impl Api {
         let session = NonNull::new(handle).map(|handle| OwnedSession {
             api: self,
             handle: Some(handle),
-            name: name.into(),
         });
         if let Err(error) = hresult(code, "Create WSLC session") {
             drop(session);
@@ -274,7 +286,6 @@ impl SessionApi for Api {
 pub struct OwnedSession<'a> {
     api: &'a dyn SessionApi,
     handle: Option<NonNull<c_void>>,
-    name: String,
 }
 
 impl OwnedSession<'_> {
@@ -295,8 +306,6 @@ impl OwnedSession<'_> {
         }
 
         if errors.is_empty() {
-            eprintln!("Released session {}", self.name);
-
             Ok(())
         } else {
             Err(errors.join("\n"))
@@ -344,7 +353,6 @@ mod tests {
         let mut session = OwnedSession {
             api: &api,
             handle: Some(NonNull::dangling()),
-            name: "test".into(),
         };
 
         assert!(session.close().unwrap_err().contains("FFFFFFFF"));
@@ -365,7 +373,6 @@ mod tests {
             let _session = OwnedSession {
                 api: &api,
                 handle: Some(NonNull::dangling()),
-                name: "test".into(),
             };
             panic!("operation failed");
         }));
@@ -377,7 +384,6 @@ mod tests {
             let _session = OwnedSession {
                 api: &api,
                 handle: Some(NonNull::dangling()),
-                name: "test".into(),
             };
             Err("operation failed".into())
         };

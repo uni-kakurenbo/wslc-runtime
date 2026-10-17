@@ -1,6 +1,6 @@
 [workspace]
-members = ["crates/wslc-runtime", "crates/wslc-simple-gcc"]
-default-members = ["crates/wslc-simple-gcc"]
+members = ["crates/wslc-runtime"]
+default-members = ["crates/wslc-runtime"]
 resolver = "3"
 
 [workspace.package]
@@ -9,7 +9,7 @@ edition = "2024"
 rust-version = "1.99"
 publish = false
 license = "MIT"
-repository = "https://github.com/uni-kakurenbo/wslc-simple-gcc"
+repository = "https://github.com/uni-kakurenbo/wslc-runtime"
 
 [workspace.dependencies]
 wslc-runtime = { path = "crates/wslc-runtime" }

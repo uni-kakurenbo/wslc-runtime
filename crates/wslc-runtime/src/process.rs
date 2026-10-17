@@ -14,6 +14,25 @@ use std::time::{Duration, Instant};
 pub const NATIVE_TIMEOUT: Duration = Duration::from_secs(120);
 pub const CONTAINER_TIMEOUT: Duration = Duration::from_secs(1800);
 
+/// WSLC cannot attach Windows NUL as interactive input; it already denotes EOF.
+pub fn stdin_available() -> bool {
+    #[cfg(windows)]
+    {
+        use std::io::IsTerminal;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileType,
+        };
+        use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE};
+        // SAFETY: GetFileType only inspects the process-owned standard handle.
+        let kind = unsafe { GetFileType(GetStdHandle(STD_INPUT_HANDLE)) };
+        matches!(kind, FILE_TYPE_DISK | FILE_TYPE_PIPE) || std::io::stdin().is_terminal()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
 /// Return from CLI entry points after their scoped resources have been dropped.
 /// Preserve wide Windows status codes that stable `ExitCode` cannot represent.
 pub fn report(result: Result<i32>) -> ExitCode {

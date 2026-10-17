@@ -344,13 +344,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wslc-simple-gcc"
-version = "0.2.0"
-dependencies = [
- "wslc-runtime",
-]
-
-[[package]]
 name = "zip"
 version = "2.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

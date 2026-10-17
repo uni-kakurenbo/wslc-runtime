@@ -1,127 +1,87 @@
-# wslc-simple-gcc
+# wslc-runtime
 
-Windows の WSL Containers を使い、C・C++・アセンブリを GCC 16 でコンパイルして実行する Rust CLI です。Rust から呼び出す API も同じ実装を利用します。
+WSL Containers の SDK・セッション・コンテナ実行を扱う Rust ライブラリと、ホストのコマンドへセッションを貸し出す `wslc-session` です。GCC、ソースの形式、特定のアプリの設定には依存しません。
 
-ソースの結合やテンプレート変換は行いません。複数ソースは GCC に個別に渡します。
+## 必要な環境とインストール
 
-## 必要な環境
-
-- x64 Windows と WSL Containers（WSL 2.9.3 以上）。
-- ビルド・インストールには公式の Rust 1.99.0 ツールチェーン。
-- 初回の SDK・GCC イメージ取得にはネットワーク接続。
-
-インストール後は Rust、PowerShell、Docker Desktop、ユーザー側の Linux ディストリビューションを必要とせず、実行ファイルを直接呼び出せます。WSL のサービスと軽量 VM は利用します。生成・実行するバイナリは Linux 用です。
-
-WSL Containers の導入は [Microsoft の公式ドキュメント](https://learn.microsoft.com/en-us/windows/wsl/wsl-container) を参照してください。
-
-## インストール
-
-Rust 1.99 以上の環境で、公開リポジトリからインストールできます。
+WSLC の実行には x64 Windows と WSL 2.9.3 以上が必要です。Rust のビルドには固定した公式 1.99.0 ツールチェーンを使います。初回は Microsoft.WSL.Containers 3.0.1 の SDK を取得し、SHA-256 を検証します。
 
 ```sh
-cargo install --git https://github.com/uni-kakurenbo/wslc-simple-gcc --locked wslc-simple-gcc
-wslc-simple-gcc --help
-wslc-simple-gcc doctor
+cargo install --path crates/wslc-runtime --locked
+wslc-session --help
 ```
 
-クローンしたリポジトリからは次のようにインストールします。公式ツールチェーンは `rust-toolchain.toml` に固定しています。
+`process` モジュールは Windows と Unix で利用できます。SDK・セッション・コンテナのモジュールは Windows で提供します。
+
+## 所有と接続
+
+`with_session` はセッションを作成し、コールバック終了時に終了・解放します。`Context::connect` は既存の名前へ接続するだけで、セッションを作成・終了しません。`with_connection` は `WSLC_SESSION` が指定されていれば接続し、省略時は自分で所有します。
+
+```rust,no_run
+use std::process::Command;
+use wslc_runtime::container::{SessionOptions, with_session};
+use wslc_runtime::process::{Runner, CONTAINER_TIMEOUT};
+
+let root = std::env::current_dir().unwrap();
+let options = SessionOptions::new(root.join(".tools"));
+with_session(&root, &options, |session| {
+    let mut command = Command::new("your-build-tool");
+    session.configure_child(&mut command);
+    Runner { root: &root }.run_with_input(command, CONTAINER_TIMEOUT, false, true)?;
+    Ok(())
+}).unwrap();
+```
+
+`configure_child` / `child_environment` は子の `WSLC_SESSION` と `WSLC_EXECUTABLE` を設定します。プロセス全体の環境変数は変更しません。親は子の完了までセッションを保持する必要があります。接続先の存続・アクセス権は呼び出し側の契約です。
+
+SDK キャッシュの更新は短いロックで保護し、実行中はセッション保存先を別のロックで保護します。同じ保存先を所有しようとする呼び出しは待機します。既存セッションへの接続は保存先のロックを取り直さないため、同じセッション内の複数のコンテナを並列実行できます。独立した所有者を同時実行する場合は `SessionOptions.storage` も分けます。
+
+## コマンドへ貸し出す
 
 ```sh
-cargo install --path crates/wslc-simple-gcc --locked
+wslc-session -- your-build-tool
 ```
 
-## コンパイルして実行する
+指定したホストのコマンドへ接続情報を渡し、その終了まで保持します。ネストした呼び出しは既存セッションを利用します。子の入出力と終了コードを中継し、通常の開始・終了ログは出しません。`wslc-runtime` 自体は、貸し出し先のコマンドの種類を知りません。
 
-```sh
-wslc-simple-gcc examples/hello.c
-wslc-simple-gcc examples/hello.cpp --standard c++26 --compiler-arg -O2 -- "hello world" 42
-wslc-simple-gcc main.s
-```
-
-最初のソースの親ディレクトリを `/src` に読み取り専用でマウントします。ソースは呼び出し元の作業ディレクトリを基準に指定します。複数ソースを含む場合は必要に応じてプロジェクトルートを指定してください。
-
-```sh
-wslc-simple-gcc src/main.c src/util.c --project-dir . --compiler-arg -Iinclude --compiler-arg -O2
-```
-
-`--compiler-arg` と `--run-arg` は引数ごとに繰り返します。`--` 以降はすべてプログラムの引数です。空白、引用符、空文字を含む値も引数の区切りを保って渡します。
-
-```sh
-wslc-simple-gcc examples/hello.cpp --run-arg "hello world" --run-arg "" --run-arg "semi;colon"
-wslc-simple-gcc examples/hello.c --interactive
-```
-
-## オプション
-
-| オプション | 内容 | 既定値 |
+| 環境変数 | 意味 | 既定値 |
 | --- | --- | --- |
-| `--project-dir` | `/src` にマウントするルート | 最初のソースの親 |
-| `--language` | `auto` / `c` / `cpp` / `asm` | `auto` |
-| `--standard` | GCC の C/C++ 規格名 | `c23` / `c++23` |
-| `--compiler-arg` | コンパイラ・リンカー引数。繰り返し可能 | 空 |
-| `--run-arg` | プログラム引数。繰り返し可能 | 空 |
-| `--image` | GCC 16 と Bash を含む OCI イメージ | `docker.io/library/gcc:16.2.0` |
-| `--cache-dir` | SDK とセッションの保存先 | `%LOCALAPPDATA%/wslc-simple-gcc` |
-| `--wslc` | `wslc.exe` の明示的なパス | PATH、次に `%ProgramFiles%/WSL/wslc.exe` |
-| `--timeout-seconds` | コンパイル・実行の制限時間 | `1800` |
-| `--interactive` | コンソールの標準入力を接続 | 無効 |
-| `--tty` | TTY を割り当て、標準入力を接続 | 無効 |
+| `WSLC_SESSION` | 接続する既存セッション | 省略時は所有 |
+| `WSLC_EXECUTABLE` | `wslc.exe` | PATH、次に Program Files |
+| `WSLC_CACHE` | SDK のキャッシュ | LocalAppData/wslc-runtime |
+| `WSLC_STORAGE` | 所有するセッションの保存先 | キャッシュ/session-storage |
+| `WSLC_MEMORY_MB` | 所有するセッションのメモリ | 2048 |
+| `WSLC_SDK_VERSION` / `WSLC_SDK_SHA256` | SDK の版と検証値 | 対応する 3.0.1 の値 |
+| `WSLC_COMMAND_TIMEOUT` | ランチャーの子の制限秒数 | 1800 |
 
-実際のコンパイラのメジャーバージョンが 16 であることを検査します。コンパイラの情報と SDK・セッションの診断は標準エラー、プログラムの通常出力は標準出力に送ります。コンパイルに失敗した場合はその終了コード、成功した場合はプログラムの終了コードを返します。入力エラーは `2`、実行基盤のエラーは `1` です。
+Rust API はキャッシュ・保存先・メモリ・SDK を `SessionOptions` でも指定できます。CPU 数はホストの利用可能な CPU 数に合わせます。対応する SDK の C ABI は 3.0.1 に固定しています。
 
-## 実行とキャッシュ
+## 実行と解放
 
-Microsoft.WSL.Containers 3.0.1 の検証済み SDK を必要に応じて取得し、SHA-256 を確認してから DLL を読み込みます。このバージョンの C ABI に固定しています。
+`RunOptions` はイメージ、マウント、作業ディレクトリ、エントリポイント、引数を別々に保持します。引数をシェルのコードに埋め込みません。ホストのマウント元はローカル Windows ドライブ上、コンテナの作業ディレクトリは絶対パスにします。UNC パスは対象外です。
 
-各呼び出しが専用セッションを所有し、正常終了・エラー・タイムアウト時に終了と解放を行います。既定セッションや他のアプリのセッションには変更を加えません。同じキャッシュに対する同時操作はロックで防ぎます。CLI 自体を強制終了した場合の SDK による後処理は保証できません。
+プロセスは Windows の Job Object / Unix のプロセスグループで所有し、タイムアウト時は子孫も終了します。`Runner` の文字列取得 API は UTF-8 不正列を置換します。バイトをそのまま中継する CLI は標準ハンドルを継承して利用します。Windows の NUL 入力を WSLC の対話入力へ接続しないため、`stdin_available` を提供します。
 
-専用セッションには Windows 側の `available_parallelism()` が返す CPU 数を割り当てます。取得できない場合は1 CPUを使用します。メモリの既定値は2048 MiBで、起動時に CPU 数とメモリ量を表示します。
-
-GCC イメージと SDK はキャッシュに保存します。初回のイメージ取得はディスクと時間を使用します。コンパイル結果はコンテナ内の `/tmp` に作り、`--rm` でコンテナとともに削除します。ホストへの実行ファイルの書き出しは行いません。
-
-プロジェクトはローカル Windows ドライブ上に置き、選択するソースをすべて含める必要があります。UNC パスや WSL のネットワークパスには対応していません。自動判定で C・C++・アセンブリを混在させることはできません。CMake/Make や外部ライブラリの導入は対象外です。
-
-## Rust の責務
-
-```text
-crates/
-  wslc-runtime/
-    src/process.rs      プロセスの入出力・終了コード・タイムアウト
-    src/sdk.rs          HTTPS 取得・ハッシュ検証・SDK キャッシュ
-    src/session.rs      SDK 読み込み・専用セッションの所有権
-    src/container.rs    マウント・引数・コンテナ実行
-  wslc-simple-gcc/
-    src/compile.rs      ソース選択・GCC 引数・コンパイルと実行の API
-    src/native.rs       既存環境での GCC・アセンブリ実行補助
-    src/cli.rs          CLI の引数解析
-    src/main.rs         CLI の入口
-    assets/compile-run.sh  コンテナ内で GCC を呼び出す固定手順
-```
-
-Rust の呼び出し元は `SessionOptions` でキャッシュなどを指定し、`with_session` の範囲で `compile::Request` または汎用の `RunOptions` を実行します。アプリの設定ファイル、データセット、ソース構成には依存しません。`process` と `native` の補助は Windows と Linux の呼び出し元で利用できます。
+通常の終了・処理エラー・プロセスのタイムアウト時には所有セッションを終了・解放します。所有者自体の強制終了後の SDK による解放は保証しません。接続しただけのセッションや既定セッションは終了しません。
 
 ## 検証
 
 ```sh
-cargo test --workspace --locked
+cargo test --locked --workspace
 cargo fmt --all -- --check
-cargo clippy --workspace --locked --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
-端末への出力を継承する子プロセスは、Windows の親コンソールも継承します。この動作の回帰テストは Windows の端末内で実行します。
+テストはアプリに依存しない合成プロセス、キャッシュの破損、所有権、タイムアウトを使います。端末継承のテストは Windows の端末で明示的に実行します。
 
 ```sh
-cargo test --locked --package wslc-runtime --test process -- --ignored --exact streaming_children_keep_the_attached_console --nocapture
+cargo test --locked -p wslc-runtime --test process -- --ignored --exact streaming_children_keep_the_attached_console --nocapture
 ```
 
-実際の WSLC を使う統合テストは通常のテストから分離しています。
+実際の GCC との連携は、独立した `wslc-gcc` リポジトリの統合テストで検証します。ライセンスは [MIT](LICENSE) です。
+
+## Install from Git
 
 ```sh
-cargo test --locked --package wslc-simple-gcc --test containers -- --ignored --test-threads 1
+cargo install --git https://github.com/uni-kakurenbo/wslc-runtime --locked wslc-runtime
 ```
-
-C23・C++23・C++26、複数ソース、インクルードパス、引用符・空文字・日本語の引数、読み取り専用マウント、Linux から見える CPU 数、終了コード、タイムアウト後のセッション解放、SDK キャッシュの修復を検証します。テストは新規の合成ソースとこのリポジトリのサンプルを使用します。`WSLC_GCC_TEST_CACHE` でテストのキャッシュを変更できます。
-
-## ライセンス
-
-[MIT License](LICENSE)。

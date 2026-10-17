@@ -111,7 +111,6 @@ pub fn fetch(host: &str, resource: &str, destination: &Path, digest: &str) -> Re
     )
     .map_err(|e| e.to_string())?;
     let pending = Pending::new(destination);
-    eprintln!("Downloading https://{host}{resource}");
 
     let agent = wide(OsStr::new("wslc-runtime/0.2"))?;
     let host = wide(OsStr::new(host))?;

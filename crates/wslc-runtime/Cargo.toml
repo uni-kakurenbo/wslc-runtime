@@ -7,13 +7,13 @@ publish.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Owned WSLC sessions, verified SDK caching and scoped process execution"
-include = ["Cargo.toml", "src/*.rs", "tests/*.rs"]
+include = ["Cargo.toml", "src/*.rs", "src/bin/*.rs", "tests/*.rs"]
 
 [lints]
 workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_Networking_WinHttp", "Win32_System_Console"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_Networking_WinHttp", "Win32_System_Console", "Win32_Storage_FileSystem"] }
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
