@@ -1,4 +1,4 @@
-# Keep the embedded Bash script and source files consistent across platforms.
+# Normalize source and metadata line endings across platforms.
 * text=auto
 *.rs text eol=lf
 *.toml text eol=lf

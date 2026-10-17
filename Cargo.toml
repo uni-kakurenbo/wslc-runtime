@@ -1,23 +1,27 @@
-[workspace]
-members = ["crates/wslc-runtime"]
-default-members = ["crates/wslc-runtime"]
-resolver = "3"
-
-[workspace.package]
+[package]
+name = "wslc-runtime"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.99"
 publish = false
 license = "MIT"
 repository = "https://github.com/uni-kakurenbo/wslc-runtime"
+description = "Owned WSLC sessions, verified SDK caching and scoped process execution"
 
-[workspace.dependencies]
-wslc-runtime = { path = "crates/wslc-runtime" }
-windows-sys = "0.61"
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_Networking_WinHttp", "Win32_System_Console", "Win32_Storage_FileSystem"] }
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
-[workspace.lints.rust]
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 unused_must_use = "deny"
 
-[workspace.lints.clippy]
+[lints.clippy]
 undocumented_unsafe_blocks = "deny"

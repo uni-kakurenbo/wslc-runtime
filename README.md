@@ -11,7 +11,7 @@ cargo install --git https://github.com/uni-kakurenbo/wslc-runtime.git --locked w
 wslc-session --help
 ```
 
-To install from a checkout, run `cargo install --path crates/wslc-runtime --locked`.
+To install from a checkout, run `cargo install --path . --locked`.
 
 The `process` module supports Windows and Unix. The SDK, session, and container APIs are available on Windows.
 
@@ -75,15 +75,15 @@ Owned sessions are terminated and released on normal completion, errors, and com
 ## Verify
 
 ```sh
-cargo test --locked --workspace
+cargo test --locked
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
 The tests cover process arguments, captured output, cache integrity, session cleanup, and timeouts. Run the console inheritance test from an attached Windows terminal:
 
 ```sh
-cargo test --locked -p wslc-runtime --test process -- --ignored --exact streaming_children_keep_the_attached_console --nocapture
+cargo test --locked --test process -- --ignored --exact streaming_children_keep_the_attached_console --nocapture
 ```
 
 Container integration tests are in [wslc-gcc](https://github.com/uni-kakurenbo/wslc-gcc).
